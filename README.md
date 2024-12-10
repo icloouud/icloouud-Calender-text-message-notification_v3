@@ -1,13 +1,67 @@
-Breakdown of the Script:
-Authenticate with Google Calendar:
-The authenticate_google function handles authentication using OAuth 2.0. It checks if there's an existing token to authenticate the user or prompts for login if not.
-Retrieve Events:
-The script fetches events from the user's Google Calendar that are scheduled to occur in the future (up to 10 events). It uses the events().list method of the Google Calendar API to retrieve the event details.
-Send Notifications:
-For each event, if the event is starting in the next 15 minutes (or as you set it), it triggers a text message using Twilio.
-The message includes the event's summary and start time.
-Twilio Integration:
-You need a Twilio account and a valid phone number to send SMS messages. Replace the placeholder values with your actual Twilio account details.
-Additional Considerations:
-You can modify the event time check to be more specific depending on your needs (e.g., checking for upcoming events in a specific window of time).
-If you want to access multiple calendars (e.g., different accounts), you'll need to set up OAuth for each account and handle authentication separately.
+import os
+import datetime
+from twilio.rest import Client
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+# Constants for Twilio (replace with your details)
+TWILIO_PHONE_NUMBER = 'your_twilio_phone_number'
+TO_PHONE_NUMBER = 'recipient_phone_number'
+TWILIO_ACCOUNT_SID = 'your_twilio_account_sid'
+TWILIO_AUTH_TOKEN = 'your_twilio_auth_token'
+
+# Google Calendar API setup
+SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+API_CREDENTIALS_FILE = 'path_to_your_google_credentials.json'
+
+# Function to authenticate and retrieve Google Calendar events
+def authenticate_google():
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(API_CREDENTIALS_FILE, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return build('calendar', 'v3', credentials=creds)
+
+# Function to check events and send text notifications
+def check_and_notify():
+    service = authenticate_google()
+
+    now = datetime.datetime.utcnow().isoformat() + 'Z'
+    events_result = service.events().list(calendarId='primary', timeMin=now, maxResults=10, singleEvents=True,
+                                          orderBy='startTime').execute()
+    events = events_result.get('items', [])
+
+    if not events:
+        print('No upcoming events found.')
+    else:
+        for event in events:
+            event_start = event['start'].get('dateTime', event['start'].get('date'))
+            event_summary = event.get('summary', 'No title')
+            event_time = datetime.datetime.fromisoformat(event_start)
+
+            # Check if the event is happening soon (e.g., within 15 minutes)
+            if event_time - datetime.datetime.utcnow() <= datetime.timedelta(minutes=15):
+                send_text_notification(event_summary, event_time)
+
+# Function to send text notifications
+def send_text_notification(event_summary, event_time):
+    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    message = client.messages.create(
+        body=f"Reminder: Your event '{event_summary}' is starting at {event_time.strftime('%Y-%m-%d %H:%M:%S')}",
+        from_=TWILIO_PHONE_NUMBER,
+        to=TO_PHONE_NUMBER
+    )
+    print(f"Notification sent for event: {event_summary} at {event_time}")
+
+# Run the script to check for events and send notifications
+if __name__ == '__main__':
+    check_and_notify()
